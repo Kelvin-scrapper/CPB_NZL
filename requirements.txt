@@ -1,0 +1,23 @@
+# RBNZ CBP Data Pipeline Requirements
+# Web scraping and browser automation
+undetected-chromedriver>=3.5.0
+selenium>=4.15.0
+
+# Data processing and analysis
+pandas>=2.0.0
+openpyxl>=3.1.0
+xlrd>=2.0.1
+
+# Date and time handling
+python-dateutil>=2.8.2
+
+# Type hints and utilities
+typing-extensions>=4.7.0
+
+# Optional: For better performance
+numpy>=1.24.0
+
+# Development and debugging (optional)
+# pytest>=7.0.0
+# black>=23.0.0
+# flake8>=6.0.0
