@@ -17,12 +17,17 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Configure logging
+# Configure stdout to use UTF-8 encoding on Windows
+if sys.platform.startswith('win'):
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+# Configure logging with UTF-8 encoding to handle Unicode characters
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('orchestrator.log'),
+        logging.FileHandler('orchestrator.log', encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )

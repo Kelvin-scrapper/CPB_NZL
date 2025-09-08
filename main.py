@@ -1,15 +1,51 @@
 import undetected_chromedriver as uc
 import time
 import os
+import subprocess
+import re
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
+def get_chrome_version():
+    """
+    Get the installed Chrome version on Windows
+    """
+    try:
+        # Try to get Chrome version from registry
+        result = subprocess.run([
+            'reg', 'query', 
+            'HKEY_CURRENT_USER\\Software\\Google\\Chrome\\BLBeacon', 
+            '/v', 'version'
+        ], capture_output=True, text=True, shell=True)
+        
+        if result.returncode == 0:
+            match = re.search(r'version\s+REG_SZ\s+(\d+)', result.stdout)
+            if match:
+                return int(match.group(1))
+        
+        # Alternative: try HKEY_LOCAL_MACHINE
+        result = subprocess.run([
+            'reg', 'query', 
+            'HKLM\\SOFTWARE\\Google\\Chrome\\BLBeacon', 
+            '/v', 'version'
+        ], capture_output=True, text=True, shell=True)
+        
+        if result.returncode == 0:
+            match = re.search(r'version\s+REG_SZ\s+(\d+)', result.stdout)
+            if match:
+                return int(match.group(1))
+                
+    except Exception as e:
+        print(f"Error getting Chrome version: {e}")
+    
+    return None
+
 def setup_chrome_driver():
     """
-    Initialize Chrome driver with download preferences
+    Initialize Chrome driver with download preferences and version auto-detection
     """
     options = uc.ChromeOptions()
     
@@ -30,7 +66,14 @@ def setup_chrome_driver():
     # Optional: Run in headless mode (uncomment if needed)
     # options.add_argument("--headless")
     
-    return uc.Chrome(options=options)
+    # Get Chrome version and set compatible driver
+    chrome_version = get_chrome_version()
+    if chrome_version:
+        print(f"Detected Chrome version: {chrome_version}")
+        return uc.Chrome(options=options, version_main=chrome_version)
+    else:
+        print("Could not detect Chrome version, using auto-detection")
+        return uc.Chrome(options=options, version_main=None)
 
 def find_and_click_latest_mps(driver, wait):
     """

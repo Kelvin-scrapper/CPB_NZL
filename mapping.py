@@ -325,6 +325,153 @@ class RBNZMapper:
             return 'SA'
         return 'NSA'
 
+    def detect_monthly_data(self, df: pd.DataFrame) -> bool:
+        """
+        Detect if a sheet contains monthly data by analyzing date patterns and intervals
+        Returns True if monthly data is detected (sheet should be skipped)
+        """
+        try:
+            dates_found = []
+            
+            # Comprehensive scan for dates in the first few columns and more rows
+            for col_idx in range(min(4, len(df.columns))):
+                for row_idx in range(min(50, len(df))):
+                    cell_value = df.iloc[row_idx, col_idx]
+                    
+                    if pd.isna(cell_value):
+                        continue
+                    
+                    parsed_date = None
+                    
+                    # Check string date patterns
+                    if isinstance(cell_value, str):
+                        cell_str = cell_value.strip()
+                        
+                        # Specific monthly date patterns (with year validation)
+                        monthly_patterns = [
+                            (r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', 'dmy'),    # DD/MM/YYYY
+                            (r'\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b', 'ymd'),    # YYYY/MM/DD  
+                            (r'\b(\d{4})m(\d{1,2})\b', 'ym'),                     # 2024M01
+                            (r'\b(\d{4})\.(\d{1,2})\b', 'ym'),                    # 2024.01
+                        ]
+                        
+                        for pattern, date_type in monthly_patterns:
+                            match = re.search(pattern, cell_str, re.IGNORECASE)
+                            if match:
+                                try:
+                                    if date_type == 'dmy':
+                                        day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                                        if 1990 <= year <= 2030 and 1 <= month <= 12 and 1 <= day <= 31:
+                                            parsed_date = datetime(year, month, day)
+                                    elif date_type == 'ymd':
+                                        year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                                        if 1990 <= year <= 2030 and 1 <= month <= 12 and 1 <= day <= 31:
+                                            parsed_date = datetime(year, month, day)
+                                    elif date_type == 'ym':
+                                        year, month = int(match.group(1)), int(match.group(2))
+                                        if 1990 <= year <= 2030 and 1 <= month <= 12:
+                                            parsed_date = datetime(year, month, 1)
+                                except ValueError:
+                                    continue
+                        
+                        # Check for month names with years
+                        month_names = {
+                            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                            'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+                            'january': 1, 'february': 2, 'march': 3, 'april': 4, 'june': 6,
+                            'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+                        }
+                        
+                        for month_name, month_num in month_names.items():
+                            pattern = rf'\b{month_name}\s+(\d{{4}})\b'
+                            match = re.search(pattern, cell_str, re.IGNORECASE)
+                            if match:
+                                try:
+                                    year = int(match.group(1))
+                                    if 1990 <= year <= 2030:
+                                        parsed_date = datetime(year, month_num, 1)
+                                except ValueError:
+                                    continue
+                    
+                    # Check Excel serial dates
+                    elif isinstance(cell_value, (int, float)) and 1 <= cell_value <= 80000:
+                        try:
+                            excel_epoch = datetime(1899, 12, 30)
+                            parsed_date = excel_epoch + pd.Timedelta(days=cell_value)
+                            if not (1990 <= parsed_date.year <= 2030):
+                                parsed_date = None
+                        except:
+                            continue
+                    
+                    # Check pandas datetime objects
+                    elif isinstance(cell_value, (pd.Timestamp, datetime)):
+                        try:
+                            if isinstance(cell_value, pd.Timestamp):
+                                parsed_date = cell_value.to_pydatetime()
+                            else:
+                                parsed_date = cell_value
+                            if not (1990 <= parsed_date.year <= 2030):
+                                parsed_date = None
+                        except:
+                            continue
+                    
+                    if parsed_date:
+                        dates_found.append(parsed_date)
+            
+            # Analyze the dates found
+            if len(dates_found) < 6:
+                return False
+            
+            # Remove duplicates and sort
+            unique_dates = sorted(list(set(dates_found)))
+            
+            if len(unique_dates) < 6:
+                return False
+            
+            # Calculate intervals between consecutive dates
+            intervals = []
+            monthly_count = 0
+            quarterly_count = 0
+            
+            for i in range(1, min(12, len(unique_dates))):
+                days_diff = (unique_dates[i] - unique_dates[i-1]).days
+                intervals.append(days_diff)
+                
+                # Monthly intervals: 28-35 days (accounting for different month lengths)
+                if 25 <= days_diff <= 35:
+                    monthly_count += 1
+                # Quarterly intervals: 89-95 days (about 3 months)
+                elif 85 <= days_diff <= 100:
+                    quarterly_count += 1
+            
+            # Decision logic: if we have more monthly intervals than quarterly
+            if len(intervals) >= 5:
+                monthly_ratio = monthly_count / len(intervals)
+                quarterly_ratio = quarterly_count / len(intervals)
+                
+                # If more than 60% of intervals are monthly, consider it monthly data
+                if monthly_ratio > 0.6 and monthly_ratio > quarterly_ratio:
+                    logger.info(f"Monthly data detected: {monthly_count}/{len(intervals)} intervals are monthly "
+                               f"(starting from {unique_dates[0].strftime('%Y-%m-%d')})")
+                    return True
+                    
+                # Additional check: look for non-quarterly months
+                non_quarterly_months = 0
+                for date in unique_dates[:12]:  # Check first 12 dates
+                    if date.month not in [3, 6, 9, 12]:  # Not March, June, September, December
+                        non_quarterly_months += 1
+                
+                # If we have significant non-quarterly month data points, it's likely monthly
+                if non_quarterly_months >= 3:
+                    logger.info(f"Monthly data detected: found {non_quarterly_months} dates in non-quarterly months")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error detecting monthly data: {e}")
+            return False
+
     def format_date_to_quarter(self, date_value) -> str:
         """
         Convert date to YYYY-QN format as per runbook
@@ -455,12 +602,18 @@ class RBNZMapper:
             # Process sheets in their original order
             for sheet_name in excel_file.sheet_names:
                 logger.info(f"Processing sheet: {sheet_name}")
+                
                 sheet_data[sheet_name] = {}
                 sheet_metadata[sheet_name] = []
                 
                 try:
                     df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
                     if df.empty:
+                        continue
+                    
+                    # Check if sheet contains monthly data using dynamic detection
+                    if self.detect_monthly_data(df):
+                        logger.info(f"Skipping sheet '{sheet_name}' - detected monthly data")
                         continue
                     
                     # Process each column for time series data
@@ -546,7 +699,7 @@ class RBNZMapper:
                     continue
             
             # If we have no direct date matches, try sequential mapping
-            if len(numeric_data) == 0 and len(data_rows) >= 8:
+            if len(numeric_data) == 0 and len(data_rows) >= 1:
                 logger.debug(f"No direct date matches in {sheet_name} col {col_idx}, trying sequential mapping")
                 # Sort by row index and map sequentially to master periods
                 data_rows.sort(key=lambda x: x[0])
@@ -555,7 +708,7 @@ class RBNZMapper:
                         period = master_periods[i]
                         numeric_data[period] = numeric_val
             
-            if len(numeric_data) < 8:
+            if len(numeric_data) < 1:
                 return None
             
             # Create ordered arrays based on master periods
@@ -571,14 +724,14 @@ class RBNZMapper:
                     numeric_values.append(None)
                     date_values.append(period)
             
-            # Remove trailing None values but keep at least 8 data points
-            while len(numeric_values) > 8 and numeric_values[-1] is None:
+            # Remove trailing None values but keep at least 1 data point
+            while len(numeric_values) > 1 and numeric_values[-1] is None:
                 numeric_values.pop()
                 date_values.pop()
             
             # Count actual numeric values (non-None)
             actual_values = [v for v in numeric_values if v is not None]
-            if len(actual_values) < 8:
+            if len(actual_values) < 1:
                 return None
             
             # Extract description using smart pattern matching
